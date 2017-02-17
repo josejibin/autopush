@@ -348,13 +348,24 @@ class AutopushSettings(object):
         """
         token = self.fernet.decrypt(repad(token).encode('utf8'))
         public_key = None
+        token_sig = None
         if ckey_header:
             try:
                 crypto_key = CryptoKey(ckey_header)
             except CryptoKeyException:
                 raise InvalidTokenException("Invalid key data")
             public_key = crypto_key.get_label('p256ecdsa')
-
+        if auth_header and auth_header[:6] == 'vapid ':
+            #TODO: validate the Auth Header here?
+            try:
+                items = {}
+                bits = auth_header.replace(' ', '').split(',')
+                for bit in bits:
+                    k, v = bit.split('=', 1)
+                    items[k] = v
+                public_key = items['k']
+            except (KeyError, ValueError):
+                raise VapidAuthException("Invalid Auth Token")
         if version == 'v1' and len(token) != 32:
             raise InvalidTokenException("Corrupted push token")
         if version == 'v2':

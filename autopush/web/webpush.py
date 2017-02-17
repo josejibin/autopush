@@ -171,7 +171,6 @@ class WebPushCrypto04HeaderSchema(Schema):
     )
     encryption = fields.String(required=True)
     crypto_key = fields.String(
-        required=True,
         load_from="crypto-key",
     )
 
@@ -260,13 +259,35 @@ class WebPushRequestSchema(Schema):
         )
         return d
 
+    def vapid_draft_01(self, token, public_key):
+        try:
+            jwt = extract_jwt(token, public_key)
+        except (AssertionError, ValueError, JOSEError):
+            raise InvalidRequest("Invalid Authorization Header",
+                                 status_code=401, errno=109,
+                                 headers={"www-authenticate": PREF_SCHEME})
+        return jwt
+
+    def vapid_draft_02(self, rawtoken):
+        try:
+            tokens = rawtoken.split(',')
+            elements = dict()
+            for token in tokens:
+                kv = token.replace(' ', '').split('=')
+                elements[kv[0].lower()] = kv[1]
+            jwt = extract_jwt(elements['t'].encode('utf8'),
+                              elements['k'].encode('utf8'))
+            return jwt, elements['k']
+        except (AssertionError, ValueError, KeyError, JOSEError) as ex:
+            raise InvalidRequest("Invalid Authorization Header",
+                                 status_code=401, errno=109,
+                                 headers={"www-authenticate": "vapid"})
+
     def validate_auth(self, d):
         auth = d["headers"].get("authorization")
         needs_auth = d["token_info"]["api_ver"] == "v2"
         if not auth and not needs_auth:
             return
-
-        public_key = d["subscription"].get("public_key")
         try:
             auth_type, token = auth.split(' ', 1)
         except ValueError:
@@ -281,12 +302,12 @@ class WebPushRequestSchema(Schema):
                                      status_code=401, errno=109)
             return
 
-        try:
-            jwt = extract_jwt(token, public_key)
-        except (AssertionError, ValueError, JOSEError):
-            raise InvalidRequest("Invalid Authorization Header",
-                                 status_code=401, errno=109,
-                                 headers={"www-authenticate": PREF_SCHEME})
+        if auth_type.lower() == "vapid":
+            jwt, public_key = self.vapid_draft_02(token)
+        else:
+            public_key = d["subscription"].get("public_key")
+            jwt = self.vapid_draft_01(token, public_key)
+
         if jwt.get('exp', 0) < time.time():
             raise InvalidRequest("Invalid bearer token: Auth expired",
                                  status_code=401, errno=109,

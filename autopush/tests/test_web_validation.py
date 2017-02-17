@@ -812,6 +812,104 @@ class TestWebPushRequestSchemaUsingVapid(unittest.TestCase):
         eq_(errors, {})
         ok_("jwt" in result)
 
+    def test_valid_vapid_02_crypto_header_webpush(self):
+        schema = self._make_fut()
+
+        header = {"typ": "JWT", "alg": "ES256"}
+        payload = {"aud": "https://pusher_origin.example.com",
+                   "exp": int(time.time()) + 86400,
+                   "sub": "mailto:admin@example.com"}
+
+        token, crypto_key = self._gen_jwt(header, payload)
+        auth = "vapid t={token},k={key}".format(token=token,
+                                                key=crypto_key)
+        self.fernet_mock.decrypt.return_value = ('a' * 32) + \
+                                                sha256(utils.base64url_decode(
+                                                    crypto_key)).digest()
+        info = self._make_test_data(
+            body="asdfasdfasdfasdf",
+            path_kwargs=dict(
+                api_ver="v2",
+                token="asdfasdf",
+            ),
+            headers={
+                "content-encoding": "aesgcm",
+                "encryption": "salt=stuff",
+                "authorization": auth,
+            }
+        )
+
+        result, errors = schema.load(info)
+        eq_(errors, {})
+        ok_("jwt" in result)
+
+    def test_bad_vapid_02_crypto_header(self):
+        schema = self._make_fut()
+
+        header = {"typ": "JWT", "alg": "ES256"}
+        payload = {"aud": "https://pusher_origin.example.com",
+                   "exp": int(time.time()) + 86400,
+                   "sub": "mailto:admin@example.com"}
+
+        token, crypto_key = self._gen_jwt(header, payload)
+        auth = "vapid t={token},n={key}".format(token=token,
+                                                key=crypto_key)
+        self.fernet_mock.decrypt.return_value = ('a' * 32) + \
+                                                sha256(utils.base64url_decode(
+                                                    crypto_key)).digest()
+        info = self._make_test_data(
+            body="asdfasdfasdfasdf",
+            path_kwargs=dict(
+                api_ver="v2",
+                token="asdfasdf",
+            ),
+            headers={
+                "content-encoding": "aesgcm",
+                "encryption": "salt=stuff",
+                "authorization": auth,
+            }
+        )
+
+        with assert_raises(InvalidRequest) as cm:
+            schema.load(info)
+        eq_(cm.exception.status_code, 401)
+        eq_(cm.exception.errno, 109)
+
+    @patch("autopush.web.webpush.extract_jwt")
+    def test_invalid_vapid_draft2_crypto_header(self, mock_jwt):
+        schema = self._make_fut()
+        mock_jwt.side_effect = ValueError("Unknown public key "
+                                          "format specified")
+
+        header = {"typ": "JWT", "alg": "ES256"}
+        payload = {"aud": "https://pusher_origin.example.com",
+                   "exp": int(time.time()) + 86400,
+                   "sub": "mailto:admin@example.com"}
+
+        token, crypto_key = self._gen_jwt(header, payload)
+        self.fernet_mock.decrypt.return_value = ('a'*32) + \
+            sha256(utils.base64url_decode(crypto_key)).digest()
+        auth = "vapid t={token},n={key}".format(token=token,
+                                                key=crypto_key)
+        info = self._make_test_data(
+            body="asdfasdfasdfasdf",
+            path_kwargs=dict(
+                api_ver="v2",
+                token="asdfasdf",
+            ),
+            headers={
+                "content-encoding": "aesgcm",
+                "encryption": "salt=stuff",
+                "authorization": auth,
+            }
+        )
+
+        with assert_raises(InvalidRequest) as cm:
+            schema.load(info)
+
+        eq_(cm.exception.status_code, 401)
+        eq_(cm.exception.errno, 109)
+
     @patch("autopush.web.webpush.extract_jwt")
     def test_invalid_vapid_crypto_header(self, mock_jwt):
         schema = self._make_fut()
