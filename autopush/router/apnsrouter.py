@@ -62,6 +62,9 @@ class APNSRouter(object):
         self._base_tags = []
         self.apns = dict()
         self._config = router_conf
+        self._allow_aps_override = "allow_aps_override" in router_conf
+        if self._allow_aps_override:
+            del(router_conf["allow_aps_override"])
         for rel_channel in self._config:
             self.apns[rel_channel] = self._connect(rel_channel,
                                                    load_connections)
@@ -87,6 +90,8 @@ class APNSRouter(object):
         if not router_data.get("token"):
             raise RouterException("No token registered", status_code=400,
                                   response_body="No token registered")
+        if 'aps' in router_data and not self._allow_aps_override:
+                del(router_data['aps'])
         router_data["rel_channel"] = app_id
 
     def amend_endpoint_response(self, response, router_data):
@@ -133,10 +138,14 @@ class APNSRouter(object):
                 payload["cryptokey"] = notification.headers["crypto_key"]
             elif "encryption_key" in notification.headers:
                 payload["enckey"] = notification.headers["encryption_key"]
-            payload['aps'] = router_data.get('aps', {
+            default_payload = {
                 "mutable-content": 1,
                 "alert": {"title": " ", "body": " "}
-            })
+            }
+            if self._allow_aps_override:
+                payload['aps'] = router_data.get('aps', default_payload)
+            else:
+                payload['aps'] = default_payload
         apns_id = str(uuid.uuid4()).lower()
         try:
             apns_client.send(router_token=router_token, payload=payload,

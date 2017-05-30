@@ -1953,18 +1953,22 @@ class TestAPNSBridgeIntegration(IntegrationBase):
     class m_response:
         status = 200
 
-    def _add_router(self):
+    def _add_router(self, override=False):
         from autopush.router.apnsrouter import APNSRouter
         from mock import Mock
-        apns = APNSRouter(
-            self.ep.settings, {
+
+        router_settings = {
                 "firefox": {
                     "cert": "/home/user/certs/SimplePushDemo.p12_cert.pem",
                     "key": "/home/user/certs/SimplePushDemo.p12_key.pem",
                     "sandbox": True,
                 }
-            },
-            load_connections=False,)
+            }
+        if override:
+            router_settings["allow_aps_override"] = True
+        apns = APNSRouter(self.ep.settings,
+                          router_settings,
+                          load_connections=False)
         self.ep.settings.routers["apns"] = apns
         # Set up the mock call to avoid calling the live system.
         # The problem with calling the live system (even sandboxed) is that
@@ -2029,7 +2033,7 @@ class TestAPNSBridgeIntegration(IntegrationBase):
 
     @inlineCallbacks
     def test_registration_aps_override(self):
-        self._add_router()
+        self._add_router(override=True)
         # get the senderid
         url = "{}/v1/{}/{}/registration".format(
             self.ep.settings.endpoint_url,
@@ -2076,6 +2080,58 @@ class TestAPNSBridgeIntegration(IntegrationBase):
         eq_(ca_data['enc'], salt)
         ok_('mutable-content' not in ca_data['aps'])
         eq_(ca_data['aps']['foo'], "bar")
+        eq_(ca_data['body'], base64url_encode(data))
+
+    @inlineCallbacks
+    def test_registration_no_override(self):
+        self._add_router()
+        # get the senderid
+        url = "{}/v1/{}/{}/registration".format(
+            self.ep.settings.endpoint_url,
+            "apns",
+            "firefox",
+        )
+        response, body = yield _agent('POST', url, body=json.dumps(
+            {"token": uuid.uuid4().hex,
+             "aps": {"foo": "bar", "gorp": "baz"}
+             }
+        ))
+        eq_(response.code, 200)
+        jbody = json.loads(body)
+
+        # Send a fake message
+        data = ("\xa2\xa5\xbd\xda\x40\xdc\xd1\xa5\xf9\x6a\x60\xa8\x57\x7b\x48"
+                "\xe4\x43\x02\x5a\x72\xe0\x64\x69\xcd\x29\x6f\x65\x44\x53\x78"
+                "\xe1\xd9\xf6\x46\x26\xce\x69")
+        crypto_key = ("keyid=p256dh;dh=BAFJxCIaaWyb4JSkZopERL9MjXBeh3WdBxew"
+                      "SYP0cZWNMJaT7YNaJUiSqBuGUxfRj-9vpTPz5ANmUYq3-u-HWOI")
+        salt = "keyid=p256dh;salt=S82AseB7pAVBJ2143qtM3A"
+        content_encoding = "aesgcm"
+
+        response, body = yield _agent(
+            'POST',
+            str(jbody['endpoint']),
+            headers=Headers({
+                "crypto-key": [crypto_key],
+                "encryption": [salt],
+                "ttl": ["0"],
+                "content-encoding": [content_encoding],
+            }),
+            body=data
+        )
+
+        ca_data = json.loads(
+            self._mock_connection.request.call_args[1]['body'])
+        eq_(response.code, 201)
+        # ChannelID here MUST match what we got from the registration call.
+        # Currently, this is a lowercase, hex UUID without dashes.
+        eq_(ca_data['chid'], jbody['channelID'])
+        eq_(ca_data['con'], content_encoding)
+        eq_(ca_data['cryptokey'], crypto_key)
+        eq_(ca_data['enc'], salt)
+        ok_('mutable-content' in ca_data['aps'])
+        eq_(ca_data['aps']['alert']['title'], " ")
+        eq_(ca_data['aps']['alert']['body'], " ")
         eq_(ca_data['body'], base64url_encode(data))
 
 
