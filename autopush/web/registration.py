@@ -1,5 +1,7 @@
 import re
 import uuid
+
+from marshmallow_polyfield import PolyField
 from typing import (  # noqa
     Optional,
     Set,
@@ -71,7 +73,14 @@ class SubInfoSchema(Schema):
 class TokenSchema(SubInfoSchema):
     """Filters allowed values from body data"""
     token = fields.Str(allow_none=True)
-    # Temporarily allow 'aps' definition data for iOS.
+
+
+class GCMTokenSchema(SubInfoSchema):
+    token = fields.Str(allow_none=False)
+
+
+class APNSTokenSchema(SubInfoSchema):
+    token = fields.Str(allow_none=False)
     aps = fields.Dict(allow_none=True)
 
 
@@ -158,8 +167,18 @@ class AuthorizationCheckSchema(Schema):
                                      headers=request_pref_header)
 
 
+def conditional_token_check(object_dict, parent_dict):
+    if parent_dict['path_kwargs']['type'] in ['gcm', 'fcm']:
+        return GCMTokenSchema()
+    if parent_dict['path_kwargs']['type'] == 'apns':
+        return APNSTokenSchema()
+    return TokenSchema()
+
+
 class RouterDataSchema(Schema):
-    router_data = fields.Nested(TokenSchema, load_from="body")
+    router_data = PolyField(
+        load_from="body",
+        deserialization_schema_selector=conditional_token_check)
 
     @validates_schema(skip_on_field_errors=True)
     def register_router(self, data):
